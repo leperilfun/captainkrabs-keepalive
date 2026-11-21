@@ -5,10 +5,10 @@
  * - Vérifie le verrou anti-oscillation serveur (`strategistLock.unlocked` : >= 30 marchés indépendants & >= 6h).
  * - Si le verrou est actif : n'appelle PAS le LLM (0 gaspillage de tokens), journalise la progression X/30.
  * - Si le verrou est déverrouillé :
- *   1. Compare Poche A & Poche B vs les 5 pistes R&D, l'attribution PnL et les scores Brier.
- *   2. Interroge Gemini 2.5 Flash en mode réflexion approfondie (`thinkingBudget: 2048`) pour identifier
- *      au maximum 1 directive ambitieuse et disciplinée (MUTATE_GENOME OFAT dans GENOME_MAX_DELTA, PROMOTE R&D,
- *      REALLOCATE_POCKETS, SET_POLICY, LAUNCH_EXPERIMENT ou HOLD).
+ *   1. Analyse le testing A/B en direct entre Poche A (Maker) et Poche B (Conviction), l'attribution PnL et les scores Brier.
+ *   2. Interroge Gemini 2.5 Flash en mode réflexion approfondie (`thinkingBudget: 1536`) pour identifier
+ *      au maximum 1 directive ambitieuse et disciplinée (MUTATE_GENOME OFAT dans GENOME_MAX_DELTA, PROMOTE A/B,
+ *      REALLOCATE_POCKETS, SET_POLICY ou HOLD) + distiller une nouvelle leçon Karpathy issue du testing A/B Shadow.
  *   3. Signe `ck.directive.v1` en HMAC-SHA256 et l'envoie à `POST /api/directives` (avec auto-rollback 30 trades côté serveur).
  */
 import { createHmac, randomUUID } from 'node:crypto';
@@ -161,7 +161,7 @@ async function main() {
 
   if (!lock.unlocked) {
     console.log(
-      `[Council] Verrou anti-oscillation actif (${lock.independentClosedTrades}/${lock.minRequiredTrades} marchés indépendants). Collecte Shadow en cours — 0 appel LLM consommé.`,
+      `[Council] Verrou anti-oscillation actif (${lock.independentClosedTrades}/${lock.minRequiredTrades} marchés indépendants). Collecte Shadow A/B en cours — 0 appel LLM consommé.`,
     );
     return;
   }
@@ -172,40 +172,39 @@ async function main() {
   }
 
   const prompt = `Tu es le Conseil Stratège (Vitesse 3) de CaptainKrabs V4 sur Polymarket.
-Objectif : améliorer durablement la rentabilité nette ajustée du risque (ROI, Win-Rate, Profit Factor, Drawdown maîtrisé) de Poche A (Micro-Trading Maker) et Poche B (Conviction) en t'appuyant sur les données réelles Shadow, les 5 pistes R&D et la Mémoire Karpathy.
+Objectif : améliorer durablement la rentabilité nette ajustée du risque (ROI, Win-Rate, Profit Factor, Drawdown maîtrisé) à partir du TESTING A/B en direct entre Poche A (Micro-Trading Maker) et Poche B (Conviction), de l'attribution PnL Shadow et de la Mémoire Karpathy.
 
 RÈGLES ABSOLUES :
 1. INTERDICTION TOTALE de proposer une clé HARD (bankroll, maxStake, cashReservePct, killSwitch, maxDailyLoss, etc.).
 2. Maximum 1 seule directive par Conseil (ou "decision": "HOLD" si les réglages actuels gagnent déjà proprement).
-3. Respecte la Mémoire Karpathy (\`karpathyLessons\`) : capitalise sur les patterns gagnants et ne re-tente pas une mutation qui vient déjà d'être rollbackée sans preuve nouvelle.
+3. Respecte la Mémoire Karpathy (\`karpathyLessons\`) : capitalise sur les patterns gagnants du Shadow A/B et ne re-tente pas une mutation qui vient déjà d'être rollbackée sans preuve nouvelle.
 4. Pour MUTATE_GENOME : règle OFAT stricte = EXACTEMENT 1 seul gène dans "patch", respectant GENOME_MAX_DELTA :
    ${JSON.stringify(GENOME_MAX_DELTA)}
-   Exemples pour viser une rentabilité plus ambitieuse quand les stats le justifient :
-   - Si win-rate > 60% et les gains sont coupés trop tôt -> augmenter takeProfitCents (+2 ou +3c) ou trailArmCents (+1 ou +2c)
+   Exemples pour viser une rentabilité plus ambitieuse quand le testing A/B Shadow le justifie :
+   - Si une poche a un win-rate > 60% et les gains sont coupés trop tôt -> augmenter takeProfitCents (+2 ou +3c) ou trailArmCents (+1 ou +2c)
    - Si rendement positif solide (IC95 > 0 et MDD < 6%) -> augmenter kellyFraction (+0.05 max, plafond 0.35)
    - Si les entrées à faible avantage perdent -> monter minEdgeCents (+0.5 ou +1c) ou minConfidence (+0.05)
    - Si trop de SL serrés sur du bruit -> ajuster stopLossCents (+1 ou +2c max)
-5. Pour PROMOTE : uniquement si une piste R&D a >= 25 trades clos et bat nettement Poche A ou Poche B en ROI et MDD -> patch: { "sourceRdSessionId": "rd-...", "targetPocket": "POCHE_A_MAKER" | "POCHE_B_CONVICTION" }.
+5. Pour PROMOTE (A/B) : si Poche A ou Poche B bat nettement l'autre poche sur >= 25 trades clos -> copier le génome gagnant vers la poche en retard : patch: { "sourceSessionId": "shadow-poche-a" | "shadow-poche-b", "targetPocket": "POCHE_A_MAKER" | "POCHE_B_CONVICTION" }.
 6. Pour REALLOCATE_POCKETS / SET_POLICY : patch dans PolicySchema uniquement (pocheAAllocationPct + pocheBAllocationPct = 100 dans [20, 80], blockedCategories, etc.).
-7. Pour LAUNCH_EXPERIMENT : tester une idée audacieuse en R&D avant Shadow -> patch: { "label": "...", "genomePatch": { ... } }.
-8. Toute mutation/promotion est automatiquement protégée par auto-rollback après 30 trades si elle régresse.
-9. Si tu découvres une règle statistique durable (pattern gagnant ou piège confirmé), remplis optionnellement "newLesson" pour enrichir la Mémoire Karpathy.
+7. Toute mutation/promotion est automatiquement protégée par auto-rollback après 30 trades si elle régresse.
+8. Tire TOUJOURS une leçon synthétique de l'analyse Shadow & A/B Poche A vs Poche B dans "newLesson" dès qu'un enseignement statistique clair se dégage pour enrichir la Mémoire Karpathy.
 
-RAPPORT COMPLET LIVE :
+RAPPORT COMPLET LIVE (SHADOW + TESTING A/B) :
 ${JSON.stringify({ policy: snap.json.policy, strategistReport: report, brierSources: snap.json.brierSources, karpathyLessons: lessons, recentDirectives: (snap.json.recentDirectives || []).slice(0, 4) })}
 
 Réponds STRICTEMENT en JSON :
 {
   "decision": "HOLD" | "APPLY",
-  "analysisFr": "synthèse claire en 2 phrases max",
+  "analysisFr": "synthèse claire du testing A/B Shadow en 2 phrases max",
   "newLesson": null | {
     "category": "WIN_PATTERN" | "AVOID_TRAP" | "RISK_RULE" | "PARAMETER_LESSON",
     "titleFr": "titre court (max 100 chars)",
-    "lessonFr": "règle concrète actionnable en français (max 280 chars)",
-    "evidenceFr": "preuve chiffrée (max 140 chars)"
+    "lessonFr": "règle concrète actionnable tirée de Shadow A/B en français (max 280 chars)",
+    "evidenceFr": "preuve chiffrée A/B (max 140 chars)"
   },
   "directive": null | {
-    "kind": "MUTATE_GENOME" | "PROMOTE" | "REALLOCATE_POCKETS" | "SET_POLICY" | "LAUNCH_EXPERIMENT",
+    "kind": "MUTATE_GENOME" | "PROMOTE" | "REALLOCATE_POCKETS" | "SET_POLICY",
     "target": { "sessionId": "shadow-poche-a" | "shadow-poche-b" },
     "patch": {},
     "rationaleFr": "justification claire en français (max 240 chars)",
@@ -223,7 +222,7 @@ Réponds STRICTEMENT en JSON :
     const lRes = await apiJson('/api/brain/lessons', {
       method: 'POST',
       body: JSON.stringify({
-        source: 'COUNCIL_STRATEGIST',
+        source: 'SHADOW_AB',
         category: parsed.newLesson.category || 'PARAMETER_LESSON',
         titleFr: parsed.newLesson.titleFr.slice(0, 120),
         lessonFr: parsed.newLesson.lessonFr.slice(0, 320),
