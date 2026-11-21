@@ -1,0 +1,37 @@
+name: CaptainKrabs 24/7 Council Strategist (Every 6h)
+
+on:
+  schedule:
+    # Every 6 hours at off-peak minute :17 (respects server N_eff >= 30 & 6h lock)
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: captainkrabs-council
+  cancel-in-progress: true
+
+jobs:
+  council:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout strategist script
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run Autonomous Strategist Council (Lock-Gated)
+        env:
+          CK_RENDER_URL: ${{ secrets.CK_RENDER_URL }}
+          DAEMON_API_KEY: ${{ secrets.DAEMON_API_KEY }}
+          DAEMON_SIGNING_KEY: ${{ secrets.DAEMON_SIGNING_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NEON_AI_GATEWAY_BASE_URL: ${{ secrets.NEON_AI_GATEWAY_BASE_URL }}
+          NEON_AI_GATEWAY_TOKEN: ${{ secrets.NEON_AI_GATEWAY_TOKEN }}
+          COUNCIL_MODEL: gemini-2.5-flash
+        run: node scripts/council-strategist.mjs
