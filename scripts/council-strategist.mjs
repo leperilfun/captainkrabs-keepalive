@@ -19,7 +19,10 @@ const SIGNING_KEY = (process.env.DAEMON_SIGNING_KEY || '').trim();
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
 const NEON_GW_URL = (process.env.NEON_AI_GATEWAY_BASE_URL || '').trim().replace(/\/$/, '');
 const NEON_GW_TOKEN = (process.env.NEON_AI_GATEWAY_TOKEN || '').trim();
-const LLM_MODEL = (process.env.COUNCIL_MODEL || 'gemini-2.5-flash').trim();
+const COUNCIL_MODELS = (process.env.COUNCIL_MODELS || process.env.COUNCIL_MODEL || 'gemini-3.8-flash,gemini-3-flash-preview,gemini-2.5-flash')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 const GENOME_MAX_DELTA = {
   takeProfitCents: 3,
@@ -73,34 +76,56 @@ async function apiJson(path, opts = {}) {
   return { status: res.status, ok: res.ok, json };
 }
 
+async function callSingleCouncilGemini(model, promptText, timeoutMs) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const isGemini3 = /^gemini-3/i.test(model);
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(timeoutMs),
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: promptText }] }],
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 4096,
+        responseMimeType: 'application/json',
+        thinkingConfig: isGemini3 ? { thinkingLevel: 'medium' } : { thinkingBudget: 1536 },
+      },
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
+  }
+  const data = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const textPart = [...parts].reverse().find((p) => typeof p?.text === 'string' && !p.thought) || parts[0];
+  const rawText = String(textPart?.text || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '');
+  if (!rawText) {
+    throw new Error(`Empty response (finishReason=${data?.candidates?.[0]?.finishReason ?? 'unknown'})`);
+  }
+  return { councilName: `COUNCIL-${model.toUpperCase()}`, parsed: JSON.parse(rawText) };
+}
+
 async function callCouncilLlm(promptText) {
+  const errors = [];
   if (GEMINI_API_KEY) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(LLM_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(45_000),
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: promptText }] }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 4096,
-          responseMimeType: 'application/json',
-          thinkingConfig: { thinkingBudget: 1536 },
-        },
-      }),
-    });
-    if (!res.ok) {
-      throw new Error(`Gemini Council API HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    for (let i = 0; i < COUNCIL_MODELS.length; i++) {
+      const model = COUNCIL_MODELS[i];
+      const timeoutMs = i === 0 && model === 'gemini-3.8-flash' ? 25_000 : 40_000;
+      try {
+        return await callSingleCouncilGemini(model, promptText, timeoutMs);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`${model}: ${msg}`);
+        const nextModel = COUNCIL_MODELS[i + 1];
+        if (nextModel) {
+          console.warn(`[Council LLM] ${model} indisponible (${msg.slice(0, 110)}) -> bascule vers ${nextModel}`);
+        }
+      }
     }
-    const data = await res.json();
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const textPart = [...parts].reverse().find((p) => typeof p?.text === 'string' && !p.thought) || parts[0];
-    const rawText = String(textPart?.text || '{}')
-      .trim()
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/, '');
-    return { councilName: `COUNCIL-${LLM_MODEL.toUpperCase()}`, parsed: JSON.parse(rawText) };
   }
 
   if (NEON_GW_URL && NEON_GW_TOKEN) {
@@ -128,6 +153,9 @@ async function callCouncilLlm(promptText) {
     return { councilName: `COUNCIL-NEON-${gwModel.toUpperCase()}`, parsed: JSON.parse(rawText) };
   }
 
+  if (errors.length > 0) {
+    throw new Error(`Tous les modèles Conseil ont échoué: ${errors.join(' | ')}`);
+  }
   return null;
 }
 

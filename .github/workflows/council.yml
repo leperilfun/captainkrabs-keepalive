@@ -33,5 +33,5 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NEON_AI_GATEWAY_BASE_URL: ${{ secrets.NEON_AI_GATEWAY_BASE_URL }}
           NEON_AI_GATEWAY_TOKEN: ${{ secrets.NEON_AI_GATEWAY_TOKEN }}
-          COUNCIL_MODEL: gemini-2.5-flash
+          COUNCIL_MODELS: gemini-3.8-flash,gemini-3-flash-preview,gemini-2.5-flash
         run: node scripts/council-strategist.mjs

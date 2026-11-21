@@ -15,7 +15,7 @@ concurrency:
 jobs:
   pulse:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     steps:
       - name: Checkout scheduler script
         uses: actions/checkout@v4
@@ -33,6 +33,6 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NEON_AI_GATEWAY_BASE_URL: ${{ secrets.NEON_AI_GATEWAY_BASE_URL }}
           NEON_AI_GATEWAY_TOKEN: ${{ secrets.NEON_AI_GATEWAY_TOKEN }}
-          LLM_MODEL: gemini-2.5-flash
+          LLM_MODELS: gemini-3.8-flash,gemini-3-flash-preview,gemini-2.5-flash
           FORCE_LLM: ${{ github.event_name == 'workflow_dispatch' }}
         run: node scripts/pulse.mjs

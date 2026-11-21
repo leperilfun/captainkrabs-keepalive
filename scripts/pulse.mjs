@@ -17,7 +17,11 @@ const SIGNING_KEY = (process.env.DAEMON_SIGNING_KEY || '').trim();
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
 const NEON_GW_URL = (process.env.NEON_AI_GATEWAY_BASE_URL || '').trim().replace(/\/$/, '');
 const NEON_GW_TOKEN = (process.env.NEON_AI_GATEWAY_TOKEN || '').trim();
-const LLM_MODEL = (process.env.LLM_MODEL || 'gemini-2.5-flash').trim();
+const LLM_MODELS = (process.env.LLM_MODELS || process.env.LLM_MODEL || 'gemini-3.8-flash,gemini-3-flash-preview,gemini-2.5-flash')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const PRIMARY_MODEL = LLM_MODELS[0] || 'gemini-3.8-flash';
 const FORCE_LLM = process.env.FORCE_LLM === 'true';
 
 if (!BASE_URL) {
@@ -122,34 +126,60 @@ async function fetchGammaRules(conditionIds) {
   return rules;
 }
 
+function buildGeminiGenerationConfig(model, maxOutputTokens, thinkingLevel = 'low', thinkingBudget = 512) {
+  const isGemini3 = /^gemini-3/i.test(model);
+  return {
+    temperature: 0.15,
+    maxOutputTokens,
+    responseMimeType: 'application/json',
+    thinkingConfig: isGemini3 ? { thinkingLevel } : { thinkingBudget },
+  };
+}
+
+async function callSingleGeminiModel(model, promptText, timeoutMs) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(timeoutMs),
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: promptText }] }],
+      generationConfig: buildGeminiGenerationConfig(model, 2048, 'low', 512),
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
+  }
+  const data = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const textPart = [...parts].reverse().find((p) => typeof p?.text === 'string' && !p.thought) || parts[0];
+  const rawText = String(textPart?.text || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '');
+  if (!rawText) {
+    throw new Error(`Empty response (finishReason=${data?.candidates?.[0]?.finishReason ?? 'unknown'})`);
+  }
+  return { providerModel: model, parsed: JSON.parse(rawText) };
+}
+
 async function callTacticalLlm(promptText) {
+  const errors = [];
   if (GEMINI_API_KEY) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(LLM_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(30_000),
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: promptText }] }],
-        generationConfig: {
-          temperature: 0.15,
-          maxOutputTokens: 2048,
-          responseMimeType: 'application/json',
-          thinkingConfig: { thinkingBudget: 512 },
-        },
-      }),
-    });
-    if (!res.ok) {
-      throw new Error(`Gemini API HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    for (let i = 0; i < LLM_MODELS.length; i++) {
+      const model = LLM_MODELS[i];
+      const timeoutMs = i === 0 && model === 'gemini-3.8-flash' ? 18_000 : 25_000;
+      try {
+        return await callSingleGeminiModel(model, promptText, timeoutMs);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`${model}: ${msg}`);
+        const nextModel = LLM_MODELS[i + 1];
+        if (nextModel) {
+          console.warn(`[Pulse LLM] ${model} indisponible (${msg.slice(0, 110)}) -> bascule vers ${nextModel}`);
+        }
+      }
     }
-    const data = await res.json();
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const textPart = [...parts].reverse().find((p) => typeof p?.text === 'string' && !p.thought) || parts[0];
-    const rawText = String(textPart?.text || '{}')
-      .trim()
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/, '');
-    return { providerModel: LLM_MODEL, parsed: JSON.parse(rawText) };
   }
 
   if (NEON_GW_URL && NEON_GW_TOKEN) {
@@ -177,21 +207,24 @@ async function callTacticalLlm(promptText) {
     return { providerModel: `neon/${gwModel}`, parsed: JSON.parse(rawText) };
   }
 
+  if (errors.length > 0) {
+    throw new Error(`Tous les modèles Gemini ont échoué: ${errors.join(' | ')}`);
+  }
   return null;
 }
 
-async function runAutonomousLlmPilot(snap, activeModelName) {
+async function runAutonomousLlmPilot(snap, activeModelName, forceNow = false) {
   const hasLlmKey = Boolean(GEMINI_API_KEY || (NEON_GW_URL && NEON_GW_TOKEN));
   if (!hasLlmKey) {
     console.log('[Pulse] LLM 24/7 prêt mais en attente : ajoutez le secret GEMINI_API_KEY (gratuit) ou NEON_AI_GATEWAY_TOKEN.');
-    return;
+    return null;
   }
 
-  // En cron toutes les 5 min, n'appeler le LLM qu'une fois sur deux (~10 min) sauf déclenchement manuel
+  // En cron toutes les 5 min, n'appeler le LLM qu'une fois sur deux (~10 min) sauf déclenchement manuel ou boot récent
   const minuteUtc = new Date().getUTCMinutes();
-  if (!FORCE_LLM && minuteUtc % 10 >= 5) {
+  if (!FORCE_LLM && !forceNow && minuteUtc % 10 >= 5) {
     console.log('[Pulse] Cycle intermédiaire 5 min (prochain audit LLM complet dans 5 min).');
-    return;
+    return null;
   }
 
   const positions = snap.openShadowPositions || [];
@@ -276,7 +309,7 @@ Réponds STRICTEMENT avec cet objet JSON :
 }`;
 
   const llmRes = await callTacticalLlm(prompt);
-  if (!llmRes) return;
+  if (!llmRes) return null;
 
   const summary = typeof llmRes.parsed?.summaryFr === 'string' ? llmRes.parsed.summaryFr : 'Audit terminé.';
   const rawOrders = Array.isArray(llmRes.parsed?.orders) ? llmRes.parsed.orders.slice(0, 3) : [];
@@ -328,6 +361,7 @@ Réponds STRICTEMENT avec cet objet JSON :
       `[Pulse LLM] ${cleanOrder.action} -> HTTP ${res.status} | executed=${Boolean(res.json?.executed)} | ${res.json?.detailFr || res.json?.reasonFr || ''}`,
     );
   }
+  return llmRes.providerModel || activeModelName;
 }
 
 async function main() {
@@ -342,22 +376,26 @@ async function main() {
     return;
   }
 
-  const activeModel = GEMINI_API_KEY
-    ? LLM_MODEL
+  const defaultModel = GEMINI_API_KEY
+    ? PRIMARY_MODEL
     : NEON_GW_URL && NEON_GW_TOKEN
       ? `neon/${process.env.NEON_LLM_MODEL || 'gemini-3-flash'}`
       : 'gemini-3.8-flash';
 
+  // Heartbeat non destructif d'abord : préserve source=antigravity-bridge et le dernier modèle actif
   const hb = await apiJson('/api/daemon/heartbeat', {
     method: 'POST',
-    body: JSON.stringify({ model: activeModel, source: 'github-cloud-24x7' }),
+    body: '{}',
   });
   if (!hb.ok) {
     console.error(`[Pulse] Heartbeat failed HTTP ${hb.status}`);
     process.exit(1);
   }
+  const currentDaemon = hb.json?.daemon || {};
+  const activeModel = currentDaemon.model || defaultModel;
+  const freshBoot = Number(currentDaemon.heartbeatCount || 0) <= 1;
   console.log(
-    `[Pulse] Heartbeat OK (${activeModel} · github-cloud-24x7) | brainSync=${hb.json?.brainSync?.lastSuccessAt || (hb.json?.brainSync?.configured ? 'pending' : 'off')}`,
+    `[Pulse] Wake OK (model=${activeModel} · source=${currentDaemon.source || 'github-cloud-24x7'} · hb=${currentDaemon.heartbeatCount ?? 0}) | brainSync=${hb.json?.brainSync?.lastSuccessAt || (hb.json?.brainSync?.configured ? 'pending' : 'off')}`,
   );
 
   const snap = await apiJson('/api/daemon/snapshot');
@@ -400,9 +438,16 @@ async function main() {
     }
   }
 
-  // 2. Pilote IA LLM autonome 24/7 (lecture Gamma + vetos wording + décisions tactiques)
+  // 2. Pilote IA LLM autonome 24/7 (chaîne failover gemini-3.8-flash -> gemini-3-flash-preview -> gemini-2.5-flash)
   try {
-    await runAutonomousLlmPilot(snap.json, activeModel);
+    const respondedModel = await runAutonomousLlmPilot(snap.json, defaultModel, freshBoot);
+    if (respondedModel) {
+      await apiJson('/api/daemon/heartbeat', {
+        method: 'POST',
+        body: JSON.stringify({ model: respondedModel, source: 'github-cloud-24x7' }),
+      });
+      console.log(`[Pulse] Heartbeat confirmé (${respondedModel} · github-cloud-24x7)`);
+    }
   } catch (err) {
     console.error('[Pulse LLM] Non-fatal error:', err instanceof Error ? err.message : String(err));
   }
