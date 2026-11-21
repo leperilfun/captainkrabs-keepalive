@@ -133,8 +133,9 @@ async function callTacticalLlm(promptText) {
         contents: [{ role: 'user', parts: [{ text: promptText }] }],
         generationConfig: {
           temperature: 0.15,
-          maxOutputTokens: 900,
+          maxOutputTokens: 2048,
           responseMimeType: 'application/json',
+          thinkingConfig: { thinkingBudget: 512 },
         },
       }),
     });
@@ -142,7 +143,12 @@ async function callTacticalLlm(promptText) {
       throw new Error(`Gemini API HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
     }
     const data = await res.json();
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const textPart = [...parts].reverse().find((p) => typeof p?.text === 'string' && !p.thought) || parts[0];
+    const rawText = String(textPart?.text || '{}')
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '');
     return { providerModel: LLM_MODEL, parsed: JSON.parse(rawText) };
   }
 
