@@ -1,0 +1,34 @@
+name: CaptainKrabs 24/7 Keep-Alive & Pulse
+
+on:
+  schedule:
+    # Every 5 minutes at off-peak minutes to minimize GitHub cron queue jitter
+    - cron: '3,8,13,18,23,28,33,38,43,48,53,58 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: captainkrabs-keepalive
+  cancel-in-progress: true
+
+jobs:
+  pulse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout scheduler script
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Wake Render & Send Signed Heartbeat
+        env:
+          CK_RENDER_URL: ${{ secrets.CK_RENDER_URL }}
+          DAEMON_API_KEY: ${{ secrets.DAEMON_API_KEY }}
+          DAEMON_SIGNING_KEY: ${{ secrets.DAEMON_SIGNING_KEY }}
+          DAEMON_MODEL: gemini-3.8-flash
+        run: node scripts/pulse.mjs
