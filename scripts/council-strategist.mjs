@@ -149,8 +149,9 @@ async function main() {
   const report = snap.json.strategistReport;
   const hard = snap.json.hardLimits || {};
 
+  const lessons = (snap.json.karpathyLessons || []).slice(0, 14);
   console.log(
-    `[Council] Lock status | unlocked=${lock.unlocked} | trades=${lock.independentClosedTrades}/${lock.minRequiredTrades} | elapsedH=${lock.elapsedHours ?? 'ready'}/${lock.cooldownHours} | killSwitch=${Boolean(hard.killSwitch)}`,
+    `[Council] Lock status | unlocked=${lock.unlocked} | trades=${lock.independentClosedTrades}/${lock.minRequiredTrades} | elapsedH=${lock.elapsedHours ?? 'ready'}/${lock.cooldownHours} | karpathyLessons=${lessons.length} | killSwitch=${Boolean(hard.killSwitch)}`,
   );
 
   if (hard.killSwitch) {
@@ -171,30 +172,38 @@ async function main() {
   }
 
   const prompt = `Tu es le Conseil Stratège (Vitesse 3) de CaptainKrabs V4 sur Polymarket.
-Objectif : améliorer durablement la rentabilité nette ajustée du risque (ROI, Win-Rate, Profit Factor, Drawdown maîtrisé) de Poche A (Micro-Trading Maker) et Poche B (Conviction) en t'appuyant sur les données réelles Shadow + les 5 pistes R&D.
+Objectif : améliorer durablement la rentabilité nette ajustée du risque (ROI, Win-Rate, Profit Factor, Drawdown maîtrisé) de Poche A (Micro-Trading Maker) et Poche B (Conviction) en t'appuyant sur les données réelles Shadow, les 5 pistes R&D et la Mémoire Karpathy.
 
 RÈGLES ABSOLUES :
 1. INTERDICTION TOTALE de proposer une clé HARD (bankroll, maxStake, cashReservePct, killSwitch, maxDailyLoss, etc.).
 2. Maximum 1 seule directive par Conseil (ou "decision": "HOLD" si les réglages actuels gagnent déjà proprement).
-3. Pour MUTATE_GENOME : règle OFAT stricte = EXACTEMENT 1 seul gène dans "patch", respectant GENOME_MAX_DELTA :
+3. Respecte la Mémoire Karpathy (\`karpathyLessons\`) : capitalise sur les patterns gagnants et ne re-tente pas une mutation qui vient déjà d'être rollbackée sans preuve nouvelle.
+4. Pour MUTATE_GENOME : règle OFAT stricte = EXACTEMENT 1 seul gène dans "patch", respectant GENOME_MAX_DELTA :
    ${JSON.stringify(GENOME_MAX_DELTA)}
    Exemples pour viser une rentabilité plus ambitieuse quand les stats le justifient :
    - Si win-rate > 60% et les gains sont coupés trop tôt -> augmenter takeProfitCents (+2 ou +3c) ou trailArmCents (+1 ou +2c)
    - Si rendement positif solide (IC95 > 0 et MDD < 6%) -> augmenter kellyFraction (+0.05 max, plafond 0.35)
    - Si les entrées à faible avantage perdent -> monter minEdgeCents (+0.5 ou +1c) ou minConfidence (+0.05)
    - Si trop de SL serrés sur du bruit -> ajuster stopLossCents (+1 ou +2c max)
-4. Pour PROMOTE : uniquement si une piste R&D a >= 25 trades clos et bat nettement Poche A ou Poche B en ROI et MDD -> patch: { "sourceRdSessionId": "rd-...", "targetPocket": "POCHE_A_MAKER" | "POCHE_B_CONVICTION" }.
-5. Pour REALLOCATE_POCKETS / SET_POLICY : patch dans PolicySchema uniquement (pocheAAllocationPct + pocheBAllocationPct = 100 dans [20, 80], blockedCategories, etc.).
-6. Pour LAUNCH_EXPERIMENT : tester une idée audacieuse en R&D avant Shadow -> patch: { "label": "...", "genomePatch": { ... } }.
-7. Toute mutation/promotion est automatiquement protégée par auto-rollback après 30 trades si elle régresse.
+5. Pour PROMOTE : uniquement si une piste R&D a >= 25 trades clos et bat nettement Poche A ou Poche B en ROI et MDD -> patch: { "sourceRdSessionId": "rd-...", "targetPocket": "POCHE_A_MAKER" | "POCHE_B_CONVICTION" }.
+6. Pour REALLOCATE_POCKETS / SET_POLICY : patch dans PolicySchema uniquement (pocheAAllocationPct + pocheBAllocationPct = 100 dans [20, 80], blockedCategories, etc.).
+7. Pour LAUNCH_EXPERIMENT : tester une idée audacieuse en R&D avant Shadow -> patch: { "label": "...", "genomePatch": { ... } }.
+8. Toute mutation/promotion est automatiquement protégée par auto-rollback après 30 trades si elle régresse.
+9. Si tu découvres une règle statistique durable (pattern gagnant ou piège confirmé), remplis optionnellement "newLesson" pour enrichir la Mémoire Karpathy.
 
 RAPPORT COMPLET LIVE :
-${JSON.stringify({ policy: snap.json.policy, strategistReport: report, brierSources: snap.json.brierSources, recentDirectives: (snap.json.recentDirectives || []).slice(0, 4) })}
+${JSON.stringify({ policy: snap.json.policy, strategistReport: report, brierSources: snap.json.brierSources, karpathyLessons: lessons, recentDirectives: (snap.json.recentDirectives || []).slice(0, 4) })}
 
 Réponds STRICTEMENT en JSON :
 {
   "decision": "HOLD" | "APPLY",
   "analysisFr": "synthèse claire en 2 phrases max",
+  "newLesson": null | {
+    "category": "WIN_PATTERN" | "AVOID_TRAP" | "RISK_RULE" | "PARAMETER_LESSON",
+    "titleFr": "titre court (max 100 chars)",
+    "lessonFr": "règle concrète actionnable en français (max 280 chars)",
+    "evidenceFr": "preuve chiffrée (max 140 chars)"
+  },
   "directive": null | {
     "kind": "MUTATE_GENOME" | "PROMOTE" | "REALLOCATE_POCKETS" | "SET_POLICY" | "LAUNCH_EXPERIMENT",
     "target": { "sessionId": "shadow-poche-a" | "shadow-poche-b" },
@@ -209,6 +218,20 @@ Réponds STRICTEMENT en JSON :
 
   const { councilName, parsed } = llmRes;
   console.log(`[Council ${councilName}] decision=${parsed?.decision} | ${parsed?.analysisFr || ''}`);
+
+  if (parsed?.newLesson && typeof parsed.newLesson === 'object' && typeof parsed.newLesson.titleFr === 'string' && typeof parsed.newLesson.lessonFr === 'string') {
+    const lRes = await apiJson('/api/brain/lessons', {
+      method: 'POST',
+      body: JSON.stringify({
+        source: 'COUNCIL_STRATEGIST',
+        category: parsed.newLesson.category || 'PARAMETER_LESSON',
+        titleFr: parsed.newLesson.titleFr.slice(0, 120),
+        lessonFr: parsed.newLesson.lessonFr.slice(0, 320),
+        evidenceFr: typeof parsed.newLesson.evidenceFr === 'string' ? parsed.newLesson.evidenceFr.slice(0, 160) : councilName,
+      }),
+    });
+    console.log(`[Council] POST /api/brain/lessons -> HTTP ${lRes.status}`);
+  }
 
   if (parsed?.decision !== 'APPLY' || !parsed?.directive) {
     console.log('[Council] Décision HOLD : paramètres actuels conservés.');

@@ -235,15 +235,22 @@ async function runAutonomousLlmPilot(snap, activeModelName) {
       rules: gammaMap.get(c.conditionId) || null,
     })),
     recentCatalysts: (snap.recentCatalysts || []).slice(0, 5).map((r) => `[${r.source}] ${r.title}`),
+    karpathyLessons: (snap.karpathyLessons || []).slice(0, 10).map((l) => ({
+      source: l.source,
+      category: l.category,
+      titleFr: l.titleFr,
+      lessonFr: l.lessonFr,
+    })),
   };
 
   const prompt = `Tu es le Pilote IA Tactique de CaptainKrabs V4 sur Polymarket (portefeuille Shadow réaliste).
 Règles strictes :
 1. Zéro sur-trading : n'émets un ordre QUE s'il apporte une vraie valeur ajoutée. Sinon renvoie "orders": [].
 2. Priorité #1 — Pièges de wording & litiges UMA : si un candidat ou une position ouverte a une faute de syntaxe ambiguë, une clause piège (ex: "rejoin" alors que la personne n'est jamais partie), ou un critère subjectif dangereux -> émets VETO_ENTRY (sur un candidat) ou CLOSE_POSITION (sur une position ouverte avec ageSec >= 130).
-3. Priorité #2 — Protection des positions ouvertes (uniquement si ageSec >= 130) : ne ferme pas sur du bruit mineur (-1¢). Ne fais ADJUST_TP_TRAIL ou CLOSE_POSITION que si une nouvelle majeure ou un piège réel le justifie.
-4. Priorité #3 — Opportunités propres (OPEN_SHADOW en MAKER_GTC uniquement) : uniquement si règles Gamma 100 % objectives, pas de sport explosif, ask entre 15¢ et 82¢, spread <= 2.5¢, edgeNetCents >= 3.0, et AUCUN eventId déjà présent dans openShadowPositions.
-5. Maximum 2 ordres par cycle. Toutes les justifications ("rationaleFr") en français clair (max 160 caractères).
+3. Priorité #2 — Mémoire Karpathy active : lis impérativement \`karpathyLessons\` (leçons distillées V3 + vetos + rollbacks passés) et ne répète JAMAIS une erreur documentée (sport à volatilité extrême, carnet peu liquide, spreads larges, pièges récurrents).
+4. Priorité #3 — Protection des positions ouvertes (uniquement si ageSec >= 130) : ne ferme pas sur du bruit mineur (-1¢). Ne fais ADJUST_TP_TRAIL ou CLOSE_POSITION que si une nouvelle majeure ou un piège réel le justifie.
+5. Priorité #4 — Opportunités propres (OPEN_SHADOW en MAKER_GTC uniquement) : uniquement si règles Gamma 100 % objectives, pas de sport explosif, ask entre 15¢ et 82¢, spread <= 2.5¢, edgeNetCents >= 3.0, et AUCUN eventId déjà présent dans openShadowPositions.
+6. Maximum 2 ordres par cycle. Toutes les justifications ("rationaleFr") en français clair (max 160 caractères).
 
 Données live JSON :
 ${JSON.stringify(brief)}
@@ -343,13 +350,15 @@ async function main() {
 
   const hb = await apiJson('/api/daemon/heartbeat', {
     method: 'POST',
-    body: JSON.stringify({ model: activeModel }),
+    body: JSON.stringify({ model: activeModel, source: 'github-cloud-24x7' }),
   });
   if (!hb.ok) {
     console.error(`[Pulse] Heartbeat failed HTTP ${hb.status}`);
     process.exit(1);
   }
-  console.log(`[Pulse] Heartbeat OK (${activeModel})`);
+  console.log(
+    `[Pulse] Heartbeat OK (${activeModel} · github-cloud-24x7) | brainSync=${hb.json?.brainSync?.lastSuccessAt || (hb.json?.brainSync?.configured ? 'pending' : 'off')}`,
+  );
 
   const snap = await apiJson('/api/daemon/snapshot');
   if (!snap.ok) {
@@ -361,7 +370,7 @@ async function main() {
   const hard = snap.json.hardLimits || {};
   const recentDecisions = snap.json.recentTacticalDecisions || [];
   console.log(
-    `[Pulse] Snapshot OK | openShadow=${positions.length} | candidates=${(snap.json.candidateSignals || []).length} | activeVetos=${(snap.json.activeVetos || []).length} | killSwitch=${Boolean(hard.killSwitch)}`,
+    `[Pulse] Snapshot OK | openShadow=${positions.length} | candidates=${(snap.json.candidateSignals || []).length} | activeVetos=${(snap.json.activeVetos || []).length} | karpathyLessons=${(snap.json.karpathyLessons || []).length} | killSwitch=${Boolean(hard.killSwitch)}`,
   );
 
   if (hard.killSwitch) return;
