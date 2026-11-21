@@ -199,7 +199,7 @@ async function runAutonomousLlmPilot(snap, activeModelName) {
   const openConds = new Set(positions.map((p) => p.conditionId));
   const candidates = (snap.candidateSignals || [])
     .filter((c) => !activeVetoIds.has(c.conditionId) && !openConds.has(c.conditionId))
-    .slice(0, 6);
+    .slice(0, 10);
 
   const allCids = [...positions.map((p) => p.conditionId), ...candidates.map((c) => c.conditionId)];
   const gammaMap = await fetchGammaRules(allCids);
@@ -243,14 +243,14 @@ async function runAutonomousLlmPilot(snap, activeModelName) {
     })),
   };
 
-  const prompt = `Tu es le Pilote IA Tactique de CaptainKrabs V4 sur Polymarket (portefeuille Shadow réaliste).
+  const prompt = `Tu es le Pilote IA Tactique de CaptainKrabs V4 sur Polymarket (portefeuille Shadow mode Data-Max : maximiser les données propres sans jamais compromettre la rigueur).
 Règles strictes :
-1. Zéro sur-trading : n'émets un ordre QUE s'il apporte une vraie valeur ajoutée. Sinon renvoie "orders": [].
+1. Zéro sur-trading absurde : n'émets un ordre QUE s'il a un vrai edge propre ou protège une position. Sinon renvoie "orders": [].
 2. Priorité #1 — Pièges de wording & litiges UMA : si un candidat ou une position ouverte a une faute de syntaxe ambiguë, une clause piège (ex: "rejoin" alors que la personne n'est jamais partie), ou un critère subjectif dangereux -> émets VETO_ENTRY (sur un candidat) ou CLOSE_POSITION (sur une position ouverte avec ageSec >= 130).
 3. Priorité #2 — Mémoire Karpathy active : lis impérativement \`karpathyLessons\` (leçons distillées V3 + vetos + rollbacks passés) et ne répète JAMAIS une erreur documentée (sport à volatilité extrême, carnet peu liquide, spreads larges, pièges récurrents).
 4. Priorité #3 — Protection des positions ouvertes (uniquement si ageSec >= 130) : ne ferme pas sur du bruit mineur (-1¢). Ne fais ADJUST_TP_TRAIL ou CLOSE_POSITION que si une nouvelle majeure ou un piège réel le justifie.
-5. Priorité #4 — Opportunités propres (OPEN_SHADOW en MAKER_GTC uniquement) : uniquement si règles Gamma 100 % objectives, pas de sport explosif, ask entre 15¢ et 82¢, spread <= 2.5¢, edgeNetCents >= 3.0, et AUCUN eventId déjà présent dans openShadowPositions.
-6. Maximum 2 ordres par cycle. Toutes les justifications ("rationaleFr") en français clair (max 160 caractères).
+5. Priorité #4 — Opportunités propres (OPEN_SHADOW en MAKER_GTC uniquement) : dès que les règles Gamma sont 100 % objectives, hors sport explosif, ask entre 8¢ et 90¢, spread <= 3.5¢, edgeNetCents >= 2.0, et AUCUN eventId déjà présent dans openShadowPositions -> saisis l'opportunité en alternant POCHE_A_MAKER et POCHE_B_CONVICTION pour maximiser la collecte Shadow.
+6. Maximum 3 ordres par cycle. Toutes les justifications ("rationaleFr") en français clair (max 160 caractères).
 
 Données live JSON :
 ${JSON.stringify(brief)}
@@ -279,7 +279,7 @@ Réponds STRICTEMENT avec cet objet JSON :
   if (!llmRes) return;
 
   const summary = typeof llmRes.parsed?.summaryFr === 'string' ? llmRes.parsed.summaryFr : 'Audit terminé.';
-  const rawOrders = Array.isArray(llmRes.parsed?.orders) ? llmRes.parsed.orders.slice(0, 2) : [];
+  const rawOrders = Array.isArray(llmRes.parsed?.orders) ? llmRes.parsed.orders.slice(0, 3) : [];
   console.log(`[Pulse LLM ${llmRes.providerModel}] ${summary} | proposedOrders=${rawOrders.length}`);
 
   const validPosIds = new Set(positions.map((p) => p.id));
