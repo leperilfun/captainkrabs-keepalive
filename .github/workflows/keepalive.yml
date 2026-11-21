@@ -1,4 +1,4 @@
-name: CaptainKrabs 24/7 Keep-Alive & Pulse
+name: CaptainKrabs 24/7 Keep-Alive & AI Tactical Pilot
 
 on:
   schedule:
@@ -25,10 +25,14 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Wake Render & Send Signed Heartbeat
+      - name: Wake Render, Send Heartbeat & Run Autonomous AI Pilot
         env:
           CK_RENDER_URL: ${{ secrets.CK_RENDER_URL }}
           DAEMON_API_KEY: ${{ secrets.DAEMON_API_KEY }}
           DAEMON_SIGNING_KEY: ${{ secrets.DAEMON_SIGNING_KEY }}
-          DAEMON_MODEL: gemini-3.8-flash
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NEON_AI_GATEWAY_BASE_URL: ${{ secrets.NEON_AI_GATEWAY_BASE_URL }}
+          NEON_AI_GATEWAY_TOKEN: ${{ secrets.NEON_AI_GATEWAY_TOKEN }}
+          LLM_MODEL: gemini-2.5-flash
+          FORCE_LLM: ${{ github.event_name == 'workflow_dispatch' }}
         run: node scripts/pulse.mjs
