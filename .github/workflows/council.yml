@@ -1,9 +1,6 @@
-name: CaptainKrabs 24/7 Council Strategist (Every 6h)
+name: CaptainKrabs Council Check (Manual — Decisions via Antigravity Bridge)
 
 on:
-  schedule:
-    # Every 6 hours at off-peak minute :17 (respects server N_eff >= 30 & 6h lock)
-    - cron: '17 */6 * * *'
   workflow_dispatch:
 
 permissions: {}
@@ -15,9 +12,9 @@ concurrency:
 jobs:
   council:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 2
     steps:
-      - name: Checkout strategist script
+      - name: Checkout script
         uses: actions/checkout@v4
 
       - name: Setup Node 22
@@ -25,13 +22,9 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Run Autonomous Strategist Council (Lock-Gated)
+      - name: Check Strategist Lock Status (0 External LLM API)
         env:
           CK_RENDER_URL: ${{ secrets.CK_RENDER_URL }}
           DAEMON_API_KEY: ${{ secrets.DAEMON_API_KEY }}
           DAEMON_SIGNING_KEY: ${{ secrets.DAEMON_SIGNING_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          NEON_AI_GATEWAY_BASE_URL: ${{ secrets.NEON_AI_GATEWAY_BASE_URL }}
-          NEON_AI_GATEWAY_TOKEN: ${{ secrets.NEON_AI_GATEWAY_TOKEN }}
-          COUNCIL_MODELS: gemini-3.8-flash,gemini-3-flash-preview,gemini-2.5-flash
         run: node scripts/council-strategist.mjs

@@ -1,8 +1,8 @@
-name: CaptainKrabs 24/7 Keep-Alive & AI Tactical Pilot
+name: CaptainKrabs 24/7 Keep-Alive (Zero LLM API)
 
 on:
   schedule:
-    # Every 5 minutes at off-peak minutes to minimize GitHub cron queue jitter
+    # Every 5 minutes at off-peak minutes to keep Render Free awake (0 external LLM API calls)
     - cron: '3,8,13,18,23,28,33,38,43,48,53,58 * * * *'
   workflow_dispatch:
 
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   pulse:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 2
     steps:
       - name: Checkout scheduler script
         uses: actions/checkout@v4
@@ -25,14 +25,9 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Wake Render, Send Heartbeat & Run Autonomous AI Pilot
+      - name: Wake Render & Run Mechanical Trailing Guard (0 LLM API)
         env:
           CK_RENDER_URL: ${{ secrets.CK_RENDER_URL }}
           DAEMON_API_KEY: ${{ secrets.DAEMON_API_KEY }}
           DAEMON_SIGNING_KEY: ${{ secrets.DAEMON_SIGNING_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          NEON_AI_GATEWAY_BASE_URL: ${{ secrets.NEON_AI_GATEWAY_BASE_URL }}
-          NEON_AI_GATEWAY_TOKEN: ${{ secrets.NEON_AI_GATEWAY_TOKEN }}
-          LLM_MODELS: gemini-3.8-flash,gemini-3-flash-preview,gemini-2.5-flash
-          FORCE_LLM: ${{ github.event_name == 'workflow_dispatch' }}
         run: node scripts/pulse.mjs
