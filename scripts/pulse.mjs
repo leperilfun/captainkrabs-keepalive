@@ -438,7 +438,18 @@ async function main() {
     }
   }
 
-  // 2. Pilote IA LLM autonome 24/7 (chaîne failover gemini-3.8-flash -> gemini-3-flash-preview -> gemini-2.5-flash)
+  // 2. Pilote IA LLM autonome 24/7 (si le pilote embarqué Render tourne déjà < 12 min, ne pas dupliquer les appels LLM)
+  const emb = snap.json.embeddedPilot;
+  const embFresh =
+    Boolean(emb?.configured && emb?.lastTacticalAt) &&
+    Date.now() - Date.parse(emb.lastTacticalAt) < 12 * 60_000;
+  if (embFresh && !FORCE_LLM) {
+    console.log(
+      `[Pulse] Pilote embarqué Render déjà actif (${emb.lastTacticalModel ?? 'gemini'} · ${emb.lastTacticalAt}) : ping wake-up seul (0 doublon LLM).`,
+    );
+    return;
+  }
+
   try {
     const respondedModel = await runAutonomousLlmPilot(snap.json, defaultModel, freshBoot);
     if (respondedModel) {
